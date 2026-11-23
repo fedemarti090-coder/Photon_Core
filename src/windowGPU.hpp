@@ -9,6 +9,13 @@
 #include <vector>
 #include <fstream>
 #include <cstring>
+#include <cmath>
+
+struct alignas(16) CameraUniform
+{
+    float pos[4];
+    float target[4];
+};
 
 struct alignas(16) Triangle
 {
@@ -59,6 +66,39 @@ private:
 
     int width = 1200;
     int height = 800;
+
+    bool isDragging = false;
+    POINT lastMousePos{0, 0};
+    float camYaw = 0.0f;
+    float camPitch = 0.25f;
+    float camRadius = 3.5f;
+
+    float camTarget[3] = {0.0f, -0.3f, 0.0f};
+
+    CameraUniform computeCamera() const
+    {
+        float cosPitch = std::cos(camPitch);
+        float sinPitch = std::sin(camPitch);
+        float cosYaw = std::cos(camYaw);
+        float sinYaw = std::sin(camYaw);
+
+        float px = camTarget[0] + camRadius * cosPitch * sinYaw;
+        float py = camTarget[1] + camRadius * sinPitch;
+        float pz = camTarget[2] + camRadius * cosPitch * cosYaw;
+
+        CameraUniform cam{};
+        cam.pos[0] = px;
+        cam.pos[1] = py;
+        cam.pos[2] = pz;
+        cam.pos[3] = 1.0f;
+
+        cam.target[0] = camTarget[0];
+        cam.target[1] = camTarget[1];
+        cam.target[2] = camTarget[2];
+        cam.target[3] = 1.0f;
+
+        return cam;
+    }
 
     std::vector<uint32_t> loadShaderSpv(const std::string &shaderPath)
     {
@@ -259,10 +299,17 @@ private:
             throw std::runtime_error("Impossibile creare VkDescriptorSetLayout!");
         }
 
+        VkPushConstantRange pushConstantRange{};
+        pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pushConstantRange.offset = 0;
+        pushConstantRange.size = sizeof(CameraUniform);
+
         VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
         pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         pipelineLayoutInfo.setLayoutCount = 1;
         pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
+        pipelineLayoutInfo.pushConstantRangeCount = 1;
+        pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
         if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS)
         {
@@ -509,6 +556,15 @@ private:
             pipelineLayout,
             0, 1, &descriptorSet,
             0, nullptr);
+
+        CameraUniform camData = computeCamera();
+        vkCmdPushConstants(
+            commandBuffer,
+            pipelineLayout,
+            VK_SHADER_STAGE_COMPUTE_BIT,
+            0,
+            sizeof(CameraUniform),
+            &camData);
 
         uint32_t groupX = (swapChainExtent.width + 15) / 16;
         uint32_t groupY = (swapChainExtent.height + 15) / 16;
@@ -837,10 +893,75 @@ private:
 public:
     static LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
+        WinINIT *app = reinterpret_cast<WinINIT *>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+
+        if (uMsg == WM_NCCREATE)
+        {
+            auto *cs = reinterpret_cast<CREATESTRUCTW *>(lParam);
+            app = static_cast<WinINIT *>(cs->lpCreateParams);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(app));
+        }
+
         switch (uMsg)
         {
         case WM_DESTROY:
-            PostQuitMessage(0); // Fine del programma
+            PostQuitMessage(0);
+            return 0;
+
+        case WM_LBUTTONDOWN:
+            if (app)
+            {
+                app->isDragging = true;
+                app->lastMousePos.x = static_cast<LONG>(LOWORD(lParam));
+                app->lastMousePos.y = static_cast<LONG>(HIWORD(lParam));
+                SetCapture(hwnd);
+            }
+            return 0;
+
+        case WM_LBUTTONUP:
+            if (app && app->isDragging)
+            {
+                app->isDragging = false;
+                ReleaseCapture();
+            }
+            return 0;
+
+        case WM_MOUSEMOVE:
+            if (app && app->isDragging)
+            {
+                LONG x = static_cast<LONG>(LOWORD(lParam));
+                LONG y = static_cast<LONG>(HIWORD(lParam));
+
+                RECT clientRect{};
+                GetClientRect(hwnd, &clientRect);
+
+                if (x < clientRect.left || x >= clientRect.right ||
+                    y < clientRect.top || y >= clientRect.bottom)
+                {
+                    app->isDragging = false;
+                    if (GetCapture() == hwnd)
+                    {
+                        ReleaseCapture();
+                    }
+                    return 0;
+                }
+
+                float dx = static_cast<float>(x - app->lastMousePos.x);
+                float dy = static_cast<float>(y - app->lastMousePos.y);
+
+                app->lastMousePos.x = x;
+                app->lastMousePos.y = y;
+
+                const float sensitivity = 0.005f;
+                app->camYaw -= dx * sensitivity;
+                app->camPitch += dy * sensitivity;
+
+                const float maxPitch = 1.50f;
+                if (app->camPitch > maxPitch)
+                    app->camPitch = maxPitch;
+                if (app->camPitch < -maxPitch)
+                    app->camPitch = -maxPitch;
+            }
             return 0;
 
         case WM_PAINT:
@@ -872,7 +993,7 @@ public:
             0, CLASS_NAME, L"PhotonCore",
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT, CW_USEDEFAULT, width, height,
-            nullptr, nullptr, hInstance, nullptr);
+            nullptr, nullptr, hInstance, this);
 
         if (hwnd == NULL)
             return 0;

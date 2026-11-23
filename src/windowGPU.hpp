@@ -972,7 +972,25 @@ public:
             EndPaint(hwnd, &ps);
         }
             return 0;
+        case WM_MOUSEWHEEL:
+            if (app)
+            {
+                int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+                float wheelSteps = static_cast<float>(delta) / static_cast<float>(WHEEL_DELTA);
+
+                const float zoomSpeed = 0.35f;
+                app->camRadius -= wheelSteps * zoomSpeed;
+
+                const float minRadius = 0.8f;
+                const float maxRadius = 15.0f;
+                if (app->camRadius < minRadius)
+                    app->camRadius = minRadius;
+                if (app->camRadius > maxRadius)
+                    app->camRadius = maxRadius;
+            }
+            return 0;
         }
+
         return DefWindowProc(hwnd, uMsg, wParam, lParam);
     }
 

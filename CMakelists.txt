@@ -1,0 +1,34 @@
+cmake_minimum_required(VERSION 3.20)
+project(PhotonCore LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_executable(PhotonCore
+    main.cpp
+    src/windowGPU.hpp
+)
+
+target_include_directories(PhotonCore PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+set(Vulkan_ROOT "$ENV{VULKAN_SDK}")
+find_package(Vulkan REQUIRED)
+
+target_link_libraries(PhotonCore PRIVATE
+    Vulkan::Vulkan
+    user32
+    gdi32
+)
+
+if(MSVC)
+    target_link_options(PhotonCore PRIVATE "/SUBSYSTEM:CONSOLE")
+    # target_link_options(PhotonCore PRIVATE "/SUBSYSTEM:WINDOWS")
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    # target_link_options(PhotonCore PRIVATE "-mwindows")
+    if(MINGW)
+        target_link_options(PhotonCore PRIVATE "-municode")
+    endif()
+endif()

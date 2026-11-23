@@ -67,6 +67,9 @@ private:
     int width = 1200;
     int height = 800;
 
+    HWND windowHandle = nullptr;
+    bool framebufferResized = false;
+
     bool isDragging = false;
     POINT lastMousePos{0, 0};
     float camYaw = 0.0f;
@@ -274,6 +277,91 @@ private:
 
         swapChainImageFormat = surfaceFormat.format;
         swapChainExtent = extent;
+    }
+
+    void cleanupSwapChain()
+    {
+        if (storageImageView != VK_NULL_HANDLE)
+        {
+            vkDestroyImageView(device, storageImageView, nullptr);
+            storageImageView = VK_NULL_HANDLE;
+        }
+        if (storageImage != VK_NULL_HANDLE)
+        {
+            vkDestroyImage(device, storageImage, nullptr);
+            storageImage = VK_NULL_HANDLE;
+        }
+        if (storageImageMemory != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(device, storageImageMemory, nullptr);
+            storageImageMemory = VK_NULL_HANDLE;
+        }
+        if (swapChain != VK_NULL_HANDLE)
+        {
+            vkDestroySwapchainKHR(device, swapChain, nullptr);
+            swapChain = VK_NULL_HANDLE;
+        }
+        swapChainImages.clear();
+    }
+
+    void updateStorageImageDescriptor()
+    {
+        VkDescriptorImageInfo imageInfo{};
+        imageInfo.imageView = storageImageView;
+        imageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+        VkWriteDescriptorSet writeSet{};
+        writeSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writeSet.dstSet = descriptorSet;
+        writeSet.dstBinding = 0;
+        writeSet.dstArrayElement = 0;
+        writeSet.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writeSet.descriptorCount = 1;
+        writeSet.pImageInfo = &imageInfo;
+
+        vkUpdateDescriptorSets(device, 1, &writeSet, 0, nullptr);
+    }
+
+    void recreateSwapChain()
+    {
+        int w = 0, h = 0;
+        if (windowHandle)
+        {
+            RECT rect{};
+            GetClientRect(windowHandle, &rect);
+            w = rect.right - rect.left;
+            h = rect.bottom - rect.top;
+        }
+
+        while (w <= 0 || h <= 0)
+        {
+            if (windowHandle)
+            {
+                RECT rect{};
+                GetClientRect(windowHandle, &rect);
+                w = rect.right - rect.left;
+                h = rect.bottom - rect.top;
+            }
+            MSG msg{};
+            while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
+            {
+                if (msg.message == WM_QUIT)
+                    return;
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
+            Sleep(10);
+        }
+
+        width = w;
+        height = h;
+
+        vkDeviceWaitIdle(device);
+
+        cleanupSwapChain();
+        createSwapChain();
+        createStorageImage();
+        updateStorageImageDescriptor();
     }
 
     void createComputePipeline()
@@ -623,12 +711,26 @@ private:
 
     void drawFrame()
     {
+        if (width <= 0 || height <= 0)
+            return;
+
         vkWaitForFences(device, 1, &inFlightFence, VK_TRUE, UINT64_MAX);
-        vkResetFences(device, 1, &inFlightFence);
 
         uint32_t imageIndex = 0;
+        VkResult acquireResult = vkAcquireNextImageKHR(
+            device, swapChain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
 
-        vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+        if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR)
+        {
+            recreateSwapChain();
+            return;
+        }
+        if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR)
+        {
+            throw std::runtime_error("Impossibile acquisire la prossima immagine della Swapchain!");
+        }
+
+        vkResetFences(device, 1, &inFlightFence);
 
         recordCommandBuffer(imageIndex);
 
@@ -657,7 +759,17 @@ private:
         presentInfo.pSwapchains = &swapChain;
         presentInfo.pImageIndices = &imageIndex;
 
-        vkQueuePresentKHR(graphicsQueue, &presentInfo);
+        VkResult presentResult = vkQueuePresentKHR(graphicsQueue, &presentInfo);
+
+        if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR || framebufferResized)
+        {
+            framebufferResized = false;
+            recreateSwapChain();
+        }
+        else if (presentResult != VK_SUCCESS)
+        {
+            throw std::runtime_error("Impossibile presentare l'immagine della Swapchain!");
+        }
     }
 
     void createTriangleBuffer()
@@ -989,6 +1101,14 @@ public:
                     app->camRadius = maxRadius;
             }
             return 0;
+        case WM_SIZE:
+            if (app)
+            {
+                app->width = static_cast<int>(LOWORD(lParam));
+                app->height = static_cast<int>(HIWORD(lParam));
+                app->framebufferResized = true;
+            }
+            return 0;
         }
 
         return DefWindowProc(hwnd, uMsg, wParam, lParam);
@@ -1018,6 +1138,7 @@ public:
 
         ShowWindow(hwnd, nCmdShow);
 
+        windowHandle = hwnd;
         try
         {
             initVulkan(hwnd, hInstance);

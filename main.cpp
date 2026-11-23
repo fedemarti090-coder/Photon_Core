@@ -26,7 +26,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 
     // 3. Rettangolo a destra (su XZ a y = -0.5, spostato su +X)
     auto box = render.Parallelpiped(
-        Point{0.7f, -1.2f, -0.6f},
+        Point{0.7f, -1.19f, -0.6f},
         1.5f,
         1.1f,
         1.2f,

@@ -6,8 +6,6 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-
-
 struct Point
 {
     float x, y, z;
@@ -117,7 +115,8 @@ public:
                 const Point &c = grid[static_cast<size_t>(i + 1)][static_cast<size_t>(j + 1)];
                 const Point &d = grid[static_cast<size_t>(i)][static_cast<size_t>(j + 1)];
 
-                if (i != 0)
+                // Calotta superiore (i == 0): a e d coincidono sul polo +Y -> 1 triangolo (a, b, c)
+                if (i == 0)
                 {
                     tris.push_back(Triangle{
                         {a.x, a.y, a.z, 1.0f},
@@ -125,9 +124,24 @@ public:
                         {c.x, c.y, c.z, 1.0f},
                         {color.R, color.G, color.B, color.a}});
                 }
-
-                if (i != stacks - 1)
+                // Calotta inferiore (i == stacks - 1): b e c coincidono sul polo -Y -> 1 triangolo (a, b, d)
+                else if (i == stacks - 1)
                 {
+                    tris.push_back(Triangle{
+                        {a.x, a.y, a.z, 1.0f},
+                        {b.x, b.y, b.z, 1.0f},
+                        {d.x, d.y, d.z, 1.0f},
+                        {color.R, color.G, color.B, color.a}});
+                }
+                // Fasce intermedie: quad diviso in 2 triangoli
+                else
+                {
+                    tris.push_back(Triangle{
+                        {a.x, a.y, a.z, 1.0f},
+                        {b.x, b.y, b.z, 1.0f},
+                        {c.x, c.y, c.z, 1.0f},
+                        {color.R, color.G, color.B, color.a}});
+
                     tris.push_back(Triangle{
                         {a.x, a.y, a.z, 1.0f},
                         {c.x, c.y, c.z, 1.0f},

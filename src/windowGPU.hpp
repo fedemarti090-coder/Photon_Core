@@ -10,6 +10,14 @@
 #include <fstream>
 #include <cstring>
 
+struct alignas(16) Triangle
+{
+    float v0[4];
+    float v1[4];
+    float v2[4];
+    float albedo[4];
+};
+
 class WinINIT
 {
 private:
@@ -44,6 +52,10 @@ private:
     VkFence inFlightFence = VK_NULL_HANDLE;
 
     uint32_t graphicsQueueFamilyIndex = 0;
+
+    VkBuffer triangleBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory triangleBufferMemory = VK_NULL_HANDLE;
+    std::vector<Triangle> sceneTriangles;
 
     int width = 1200;
     int height = 800;
@@ -226,16 +238,21 @@ private:
 
     void createComputePipeline()
     {
-        VkDescriptorSetLayoutBinding binding{};
-        binding.binding = 0;
-        binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        binding.descriptorCount = 1;
-        binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        VkDescriptorSetLayoutBinding bindings[2]{};
+        bindings[0].binding = 0;
+        bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bindings[0].descriptorCount = 1;
+        bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+        bindings[1].binding = 1;
+        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[1].descriptorCount = 1;
+        bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
         VkDescriptorSetLayoutCreateInfo layoutInfo{};
         layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layoutInfo.bindingCount = 1;
-        layoutInfo.pBindings = &binding;
+        layoutInfo.bindingCount = 2;
+        layoutInfo.pBindings = bindings;
 
         if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS)
         {
@@ -347,14 +364,17 @@ private:
 
     void createDescriptorSet()
     {
-        VkDescriptorPoolSize poolSize{};
-        poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        poolSize.descriptorCount = 1;
+        VkDescriptorPoolSize poolSizes[2]{};
+        poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        poolSizes[0].descriptorCount = 1;
+
+        poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        poolSizes[1].descriptorCount = 1;
 
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolInfo.poolSizeCount = 1;
-        poolInfo.pPoolSizes = &poolSize;
+        poolInfo.poolSizeCount = 2;
+        poolInfo.pPoolSizes = poolSizes;
         poolInfo.maxSets = 1;
 
         if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS)
@@ -377,16 +397,30 @@ private:
         imageInfo.imageView = storageImageView;
         imageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-        VkWriteDescriptorSet writeSet{};
-        writeSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writeSet.dstSet = descriptorSet;
-        writeSet.dstBinding = 0;
-        writeSet.dstArrayElement = 0;
-        writeSet.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        writeSet.descriptorCount = 1;
-        writeSet.pImageInfo = &imageInfo;
+        VkDescriptorBufferInfo bufferInfo{};
+        bufferInfo.buffer = triangleBuffer;
+        bufferInfo.offset = 0;
+        bufferInfo.range = VK_WHOLE_SIZE;
 
-        vkUpdateDescriptorSets(device, 1, &writeSet, 0, nullptr);
+        VkWriteDescriptorSet writeSets[2]{};
+
+        writeSets[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writeSets[0].dstSet = descriptorSet;
+        writeSets[0].dstBinding = 0;
+        writeSets[0].dstArrayElement = 0;
+        writeSets[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writeSets[0].descriptorCount = 1;
+        writeSets[0].pImageInfo = &imageInfo;
+
+        writeSets[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writeSets[1].dstSet = descriptorSet;
+        writeSets[1].dstBinding = 1;
+        writeSets[1].dstArrayElement = 0;
+        writeSets[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writeSets[1].descriptorCount = 1;
+        writeSets[1].pBufferInfo = &bufferInfo;
+
+        vkUpdateDescriptorSets(device, 2, writeSets, 0, nullptr);
     }
 
     void createCommandPoolAndBuffer()
@@ -570,6 +604,51 @@ private:
         vkQueuePresentKHR(graphicsQueue, &presentInfo);
     }
 
+    void createTriangleBuffer()
+    {
+        if (sceneTriangles.empty())
+        {
+            sceneTriangles.push_back(Triangle{
+                {0.0f, 0.0f, 0.0f, 1.0f},
+                {0.0f, 0.0f, 0.0f, 1.0f},
+                {0.0f, 0.0f, 0.0f, 1.0f},
+                {0.0f, 0.0f, 0.0f, 1.0f}});
+        }
+
+        VkDeviceSize bufferSize = sizeof(Triangle) * sceneTriangles.size();
+
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size = bufferSize;
+        bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        if (vkCreateBuffer(device, &bufferInfo, nullptr, &triangleBuffer) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Impossibile creare il Triangle SSBO Buffer!");
+        }
+
+        VkMemoryRequirements memRequirements;
+        vkGetBufferMemoryRequirements(device, triangleBuffer, &memRequirements);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memRequirements.size;
+        allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        if (vkAllocateMemory(device, &allocInfo, nullptr, &triangleBufferMemory) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Impossibile allocare la memoria per il Triangle Buffer!");
+        }
+
+        vkBindBufferMemory(device, triangleBuffer, triangleBufferMemory, 0);
+
+        void *data = nullptr;
+        vkMapMemory(device, triangleBufferMemory, 0, bufferSize, 0, &data);
+        std::memcpy(data, sceneTriangles.data(), static_cast<size_t>(bufferSize));
+        vkUnmapMemory(device, triangleBufferMemory);
+    }
+
     void initVulkan(HWND hwnd, HINSTANCE hInstance)
     {
         VkApplicationInfo appInfo = {};
@@ -654,11 +733,14 @@ private:
 
         createStorageImage();
 
+        createTriangleBuffer();
+
         createComputePipeline();
 
         createDescriptorSet();
 
         createCommandPoolAndBuffer();
+
         createSyncObjects();
     }
 
@@ -689,6 +771,16 @@ private:
         {
             vkDestroyDescriptorPool(device, descriptorPool, nullptr);
             descriptorPool = VK_NULL_HANDLE;
+        }
+        if (triangleBuffer != VK_NULL_HANDLE)
+        {
+            vkDestroyBuffer(device, triangleBuffer, nullptr);
+            triangleBuffer = VK_NULL_HANDLE;
+        }
+        if (triangleBufferMemory != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(device, triangleBufferMemory, nullptr);
+            triangleBufferMemory = VK_NULL_HANDLE;
         }
         if (storageImageView != VK_NULL_HANDLE)
         {
@@ -825,6 +917,11 @@ public:
         cleanupVulkan();
 
         return (int)msg.wParam;
+    }
+
+    void setTriangles(const std::vector<Triangle> &tris)
+    {
+        sceneTriangles = tris;
     }
 };
 
